@@ -1,0 +1,7 @@
+; Database config
+[database]
+host = localhost
+user = foxy
+password = foxy
+name = db_name
+sslmode = disable

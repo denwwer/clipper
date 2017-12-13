@@ -1,5 +1,5 @@
 # clipper
-Find color difference between fotos
+Find color difference between photos
 
 * build
 ```

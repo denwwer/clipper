@@ -1,4 +1,3 @@
-# clipper
 Find color difference between photos
 
 * build

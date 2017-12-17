@@ -4,7 +4,7 @@ Find color difference between photos
 ```
 sh build.sh
 ```
-* help
+* check flags
 ```
 ./clipper -h
 ```

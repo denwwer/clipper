@@ -3,5 +3,5 @@
 host = localhost
 user = foxy
 password = foxy
-name = db_name
+name = test_db
 sslmode = disable

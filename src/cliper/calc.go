@@ -2,27 +2,29 @@ package cliper
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
-	"github.com/cliper/src/db"
+	"github.com/clipper/src/db"
+	"github.com/pquerna/ffjson/ffjson"
 	"log"
-	"math"
-	"sort"
 	"strconv"
 	"sync"
+	"sort"
+	"math"
 )
+
+var Debug = false
 
 const ColorAlpha = 441.673
 
 type Photo struct {
 	Id     int
-	Pixels string
+	Pixels [][]int
 }
 
 type Brick struct {
 	Id             int
-	Pixels         string
-	SpecularPixels string
+	Pixels         [][]int
+	SpecularPixels [][]int
 	BestValue      float64
 }
 
@@ -36,11 +38,7 @@ func init() {
 }
 
 func Calculate(collageId, photoSetId, brickSquare int) {
-	err := deleteDifferences(collageId)
-
-	if err != nil {
-		return
-	}
+	deleteDifferences(collageId)
 
 	chPhotos := make(chan []Photo, 1)
 	chBricks := make(chan []Brick, 1)
@@ -53,7 +51,11 @@ func Calculate(collageId, photoSetId, brickSquare int) {
 
 	var wg sync.WaitGroup
 
-	// specular
+	if Debug {
+		log.Printf("Bricks size %d", len(bricks) * 2)
+	}
+
+	// with specular
 	for _, s := range []bool{true, false} {
 		wg.Add(1)
 		go calc(bricks, photos, s, collageId, brickSquare, &wg)
@@ -64,19 +66,16 @@ func Calculate(collageId, photoSetId, brickSquare int) {
 }
 
 // deleteDifferences by collage Id
-func deleteDifferences(collageId int) error {
+func deleteDifferences(collageId int) {
 	_, err := db.PG.Exec("DELETE FROM differences WHERE collage_id = $1", collageId)
 
 	if err != nil {
 		log.Fatal("[PG] [ERROR] ", err)
-		return err
 	}
-
-	return nil
 }
 
 // TODO: add ability save to file
-//createDifferences
+// createDifferences
 func createDifferences(diff []Diff, brickId, collageId int, specular bool) {
 	var attr []interface{}
 	var buffer bytes.Buffer
@@ -117,7 +116,9 @@ func selectPhotos(photoSetId int, ch chan []Photo) {
 
 	for rows.Next() {
 		photo := Photo{}
-		rows.Scan(&photo.Id, &photo.Pixels)
+		var json string
+		rows.Scan(&photo.Id, &json)
+	  photo.Pixels = parseJSON(json)
 		photos = append(photos, photo)
 	}
 
@@ -143,7 +144,10 @@ func selectBricks(collageId int, ch chan []Brick) {
 
 	for rows.Next() {
 		brick := Brick{}
-		rows.Scan(&brick.Id, &brick.Pixels, &brick.SpecularPixels, &brick.BestValue)
+		var json, jsonSpecular string
+		rows.Scan(&brick.Id, &json, &jsonSpecular, &brick.BestValue)
+		brick.Pixels = parseJSON(json)
+		brick.SpecularPixels = parseJSON(jsonSpecular)
 		bricks = append(bricks, brick)
 	}
 
@@ -170,7 +174,8 @@ func updateBrick(brick Brick, value float64) {
 
 func parseJSON(str string) [][]int {
 	var result [][]int
-	err := json.Unmarshal([]byte(str), &result)
+
+	err := ffjson.Unmarshal([]byte(str), &result)
 
 	if err != nil {
 		log.Fatal(err)
@@ -179,44 +184,30 @@ func parseJSON(str string) [][]int {
 	return result
 }
 
+func calcSqr(brickPixel, photoPixel []int) float64 {
+	p0 := float64(brickPixel[0] - photoPixel[0])
+	p1 := float64(brickPixel[1] - photoPixel[1])
+	p2 := float64(brickPixel[2] - photoPixel[2])
+	pow := math.Pow(p0, 2) + math.Pow(p1, 2) + math.Pow(p2, 2)
+
+	return pow
+}
+
 func calcDiff(brick Brick, photo Photo, specular bool, brickSquare int) float64 {
 	var diff float64
 	var brickPixels [][]int
-
-	photoPixels := parseJSON(photo.Pixels)
+	photoPixels := photo.Pixels
 
 	if specular {
-		brickPixels = parseJSON(brick.SpecularPixels)
+		brickPixels = brick.SpecularPixels
 	} else {
-		brickPixels = parseJSON(brick.Pixels)
+		brickPixels = brick.Pixels
 	}
-
-	ch := make(chan float64)
-	chSize := brickSquare
 
 	for i := 0; i < brickSquare; i++ {
-		brickPixel := brickPixels[i]
-		photoPixel := photoPixels[i]
-
-		go func(ch chan float64, brickPixel, photoPixel []int) {
-			p0 := float64(brickPixel[0] - photoPixel[0])
-			p1 := float64(brickPixel[1] - photoPixel[1])
-			p2 := float64(brickPixel[2] - photoPixel[2])
-
-			pow := math.Pow(p0, 2) + math.Pow(p1, 2) + math.Pow(p2, 2)
-			val := math.Sqrt(pow) / ColorAlpha
-
-			ch <- val
-		}(ch, brickPixel, photoPixel)
-	}
-
-	for pixels := range ch {
-		diff += pixels
-		chSize--
-
-		if chSize == 0 {
-			close(ch)
-		}
+		pow := calcSqr(brickPixels[i], photoPixels[i])
+		val := math.Sqrt(pow) / ColorAlpha
+		diff += val
 	}
 
 	val := (diff / float64(brickSquare)) * 100
@@ -228,12 +219,25 @@ func calcDiff(brick Brick, photo Photo, specular bool, brickSquare int) float64 
 func calc(bricks []Brick, photos []Photo, specular bool, collageId, brickSquare int, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	for _, brick := range bricks {
+	for i, brick := range bricks {
 		var diffValues []Diff
+		chSize := len(photos)
+		ch := make(chan Diff)
 
 		for _, photo := range photos {
-			diff := calcDiff(brick, photo, specular, brickSquare)
-			diffValues = append(diffValues, Diff{photo.Id, diff})
+			go func(brick Brick, photo Photo, specular bool, brickSquare int, ch chan Diff){
+				diff := calcDiff(brick, photo, specular, brickSquare)
+				ch <- Diff{photo.Id, diff}
+			}(brick, photo, specular, brickSquare, ch)
+		}
+
+		for diff := range ch {
+			diffValues = append(diffValues, diff)
+			chSize--
+
+			if chSize == 0 {
+				close(ch)
+			}
 		}
 
 		// Sort by diff.Val from low to high
@@ -245,5 +249,9 @@ func calc(bricks []Brick, photos []Photo, specular bool, collageId, brickSquare 
 
 		updateBrick(brick, diffValues[0].Val)
 		createDifferences(diffValues, brick.Id, collageId, specular)
+
+		if Debug {
+			log.Printf("Processed %d", i)
+		}
 	}
 }

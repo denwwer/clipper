@@ -1,4 +1,4 @@
-Find color difference between photos
+Service to find color difference between photos
 
 * build
 ```
@@ -8,3 +8,5 @@ sh build.sh
 ```
 ./clipper -h
 ```
+## TODO
+* support AMQP

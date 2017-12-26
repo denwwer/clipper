@@ -1,0 +1,17 @@
+ differences:
+    brick_id:   integer
+    photo_id:   integer
+    value:      float
+    collage_id: integer
+    specular:   boolean
+
+photos:
+    photo_set_id: integer
+    pixels:       text
+
+bricks:
+    photo_id:   integer
+    collage_id: integer
+    pixels:     text
+    best_value: float
+    specular:   boolean
